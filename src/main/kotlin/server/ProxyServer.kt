@@ -31,17 +31,17 @@ class ProxyServer(port: Int): Thread() {
 
             while (client.isConnected) {
                 try {
-                    browserInput.read(buffer)
-                    processRequest(buffer, browserInput, browserOutput)
+                    val readCount = browserInput.read(buffer)
+                    processRequest(buffer, browserInput, browserOutput, readCount)
                 } catch (ex: Exception) {
-//                    println("Error: ${ex.message}")
+                    client.close()
                     return
                 }
             }
         }
     }
 
-    private fun processRequest(request: ByteArray, browserInput: DataInputStream, browserOutput: DataOutputStream) {
+    private fun processRequest(request: ByteArray, browserInput: DataInputStream, browserOutput: DataOutputStream, length: Int) {
         try {
             val inputStr = String(request, Charsets.UTF_8)
 
@@ -60,27 +60,36 @@ class ProxyServer(port: Int): Thread() {
             val deletedHostName = deleteHostName(inputStr).toByteArray()
 
             try {
-                serverOutput.write(deletedHostName)
+                serverOutput.write(deletedHostName, 0, length)
                 val answerBuffer = ByteArray(bufferSize)
 
-                serverInput.read(answerBuffer)
+                val readCount = serverInput.read(answerBuffer)
+                if (readCount <= 0) {
+                    return
+                }
+
                 val answer = String(answerBuffer, Charsets.UTF_8)
 
                 val responseCode = parseResponseCode(answer)
-                println("${hostName[0]} $responseCode")
+                if (responseCode != null) {
+                    println("${hostName[0]} $responseCode")
+                }
 
-                browserOutput.write(answerBuffer)
+                browserOutput.write(answerBuffer, 0, readCount)
                 serverInput.copyTo(browserOutput)
-            } catch (_: Exception) {
-
+            } catch (ex: Exception) {
+//                println("Exception: ${ex.stackTrace}")
+                ex.printStackTrace()
             } finally {
+                serverOutput.flush()
                 serverInput.close()
                 serverOutput.close()
             }
 
-        } catch (ex: Exception) {
-            println("Exception: ${ex.message}")
+        } catch (_: Exception) {
+
         } finally {
+            browserOutput.flush()
             browserInput.close()
             browserOutput.close()
         }
@@ -95,12 +104,13 @@ class ProxyServer(port: Int): Thread() {
         return hostLine.orEmpty().replace("Host:", "").trim()
     }
 
-    private fun parseResponseCode(input: String): String {
+    private fun parseResponseCode(input: String): String? {
         val strings = input.trim().split("\r\n")
         val header = strings[0]
         val response = header.split(Regex(" "), 2)
         if (response.count() < 2) {
-            throw SocketException("Wrong Response Code")
+//            throw SocketException("Wrong Response Code ${input}")
+            return null
         }
 
         return response[1]
